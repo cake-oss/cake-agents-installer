@@ -15,8 +15,10 @@
 FROM debian:bookworm-slim
 
 ARG TERRAFORM_VERSION=1.9.8
-# Set automatically by `docker buildx` (amd64 / arm64).
-ARG TARGETARCH=amd64
+# Automatically populated by BuildKit with the target arch (amd64 / arm64).
+# Do not give this a default — a default overrides the value BuildKit injects,
+# which would fetch the wrong-arch Terraform/AWS CLI binaries.
+ARG TARGETARCH
 
 ENV DEBIAN_FRONTEND=noninteractive
 
