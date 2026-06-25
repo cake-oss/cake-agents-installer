@@ -25,3 +25,9 @@ variable "install_key" {
   description = "Install key for Cake-hosted DNS automation."
   sensitive   = true
 }
+
+variable "cake_console_url" {
+  type        = string
+  default     = "https://console.cake.ai"
+  description = "URL of the Cake console this installation reports to."
+}

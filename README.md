@@ -38,6 +38,7 @@ Terraform inputs are passed as `TF_VAR_*` environment variables.
 | `TF_VAR_region` | yes | — | AWS region to deploy into |
 | `TF_VAR_install_key` | yes | — | Install key for Cake-hosted DNS automation |
 | `TF_VAR_cake_agents_chart_version` | no | `0.11.2` | cake-agents Helm chart version |
+| `TF_VAR_cake_console_url` | no | `https://console.cake.ai` | URL of the Cake console to report to |
 | `TF_VAR_vpc_cidr` | no | `10.0.0.0/16` | CIDR for the new VPC |
 
 ## Option 1: Run the container directly

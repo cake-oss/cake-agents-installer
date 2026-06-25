@@ -22,7 +22,8 @@ module "cake_agents" {
   name     = var.name
   vpc_cidr = var.vpc_cidr
 
-  install_key = var.install_key
+  install_key      = var.install_key
+  cake_console_url = var.cake_console_url
 
   cake_agents_chart_version = var.cake_agents_chart_version
 }

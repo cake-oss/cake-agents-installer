@@ -13,7 +13,7 @@ Metadata:
       - Label: { default: "Cluster" }
         Parameters: [ClusterName, Region, VpcCidr]
       - Label: { default: "Cake Agents" }
-        Parameters: [ChartVersion, InstallKey]
+        Parameters: [ChartVersion, InstallKey, ConsoleUrl]
       - Label: { default: "State" }
         Parameters: [StateBucketName]
 
@@ -59,6 +59,11 @@ Parameters:
     Type: String
     NoEcho: true
     Description: Install key from Cake, used for Cake-hosted DNS automation.
+
+  ConsoleUrl:
+    Type: String
+    Default: https://console.cake.ai
+    Description: URL of the Cake console this installation reports to.
 
 Conditions:
   GenerateBucketName: !Equals [!Ref StateBucketName, ""]
@@ -145,6 +150,7 @@ Resources:
           - { Name: TF_VAR_vpc_cidr, Value: !Ref VpcCidr }
           - { Name: TF_VAR_cake_agents_chart_version, Value: !Ref ChartVersion }
           - { Name: TF_VAR_install_key, Value: !Ref InstallKey }
+          - { Name: TF_VAR_cake_console_url, Value: !Ref ConsoleUrl }
       Source:
         Type: NO_SOURCE
         # CodeBuild overrides the image ENTRYPOINT, so invoke the installer

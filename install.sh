@@ -21,6 +21,7 @@
 #   TF_VAR_name                       (required) Cluster name, e.g. "prod"
 #   TF_VAR_region                     (required) AWS region to deploy into
 #   TF_VAR_install_key                (required) Install key for Cake-hosted DNS automation
+#   TF_VAR_cake_console_url           (optional) Cake console URL. Default: https://console.cake.ai
 #   TF_VAR_cake_agents_chart_version  (optional) cake-agents Helm chart version. Default: 0.11.2
 #   TF_VAR_vpc_cidr                   (optional) Default: 10.0.0.0/16
 #

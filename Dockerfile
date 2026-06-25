@@ -9,6 +9,7 @@
 #     -e TF_VAR_region=us-east-2 \
 #     -e TF_VAR_cake_agents_chart_version=0.11.2 \
 #     -e TF_VAR_install_key=... \
+#     -e TF_VAR_cake_console_url=https://console.cake.ai \
 #     -v $HOME/.aws:/root/.aws:ro \
 #     ghcr.io/cake-oss/cake-agents-installer:latest
 #
