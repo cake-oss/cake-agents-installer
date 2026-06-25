@@ -1,15 +1,16 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
-  Bootstraps the infrastructure needed to install Cake Agents: an S3 bucket for
+  Provisions the infrastructure needed to install Cake Agents (an S3 bucket for
   Terraform remote state and a CodeBuild project that runs the cake-agents
-  installer container image. After deploying this stack, start the install with
-  the "aws codebuild start-build" command shown in the stack Outputs.
+  installer container image). By default the install runs automatically on stack
+  create, and "terraform destroy" runs automatically on stack delete (the delete
+  blocks until it finishes). Toggle with RunOnCreate and DestroyOnDelete.
 
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label: { default: "Installer image" }
-        Parameters: [ImageUri, CakeAgentsRef]
+        Parameters: [ImageUri, CakeAgentsRef, RunOnCreate, DestroyOnDelete]
       - Label: { default: "Cluster" }
         Parameters: [ClusterName, Region, VpcCidr]
       - Label: { default: "Cake Agents" }
@@ -27,6 +28,24 @@ Parameters:
     Type: String
     Default: main
     Description: git ref of cake-oss/terraform-cake-agents to deploy.
+
+  RunOnCreate:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Automatically start the installer build when this stack is created. Set to
+      false to start it manually with the command in the stack Outputs.
+
+  DestroyOnDelete:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Run "terraform destroy" when this stack is deleted, and block stack
+      deletion until it finishes. Set to false to leave the Cake Agents
+      infrastructure running (you must then destroy it manually before deleting
+      the stack).
 
   StateBucketName:
     Type: String
@@ -164,6 +183,174 @@ Resources:
                 - cake-agents-install
       TimeoutInMinutes: 60
 
+  # Self-contained lifecycle wiring. A single Lambda backs both:
+  #   * the custom resource — starts an "apply" build on stack create, and a
+  #     "destroy" build on stack delete; and
+  #   * an EventBridge rule — fires when the destroy build finishes so the
+  #     deferred stack-delete can complete (works for any destroy duration, so
+  #     it is not bounded by the 15-minute Lambda limit).
+  InstallTriggerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: trigger-installer-build
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: codebuild:StartBuild
+                Resource: !GetAtt InstallProject.Arn
+              # Stash the pending stack-delete response until the destroy build
+              # finishes, then read it back from the EventBridge handler.
+              - Effect: Allow
+                Action: [ssm:PutParameter, ssm:GetParameter, ssm:DeleteParameter]
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cake-agents/${AWS::StackName}/destroy/*"
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+
+  InstallTriggerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Starts/awaits the Cake Agents installer build on stack create and delete.
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 60
+      Role: !GetAtt InstallTriggerRole.Arn
+      Environment:
+        Variables:
+          PROJECT_NAME: !Ref InstallProject
+          RUN_ON_CREATE: !Ref RunOnCreate
+          DESTROY_ON_DELETE: !Ref DestroyOnDelete
+          PARAM_PREFIX: !Sub "/cake-agents/${AWS::StackName}/destroy/"
+      Code:
+        ZipFile: |
+          import json
+          import os
+
+          import boto3
+          import cfnresponse
+
+          ssm = boto3.client("ssm")
+          codebuild = boto3.client("codebuild")
+
+          PREFIX = os.environ["PARAM_PREFIX"]
+
+
+          def build_uuid(build_id):
+              # "project:uuid" (start_build) or ".../build/project:uuid" (event ARN).
+              return build_id.rsplit(":", 1)[-1]
+
+
+          def handler(event, context):
+              # EventBridge "Build State Change" events have no RequestType.
+              if "RequestType" not in event:
+                  return on_build_complete(event, context)
+              return on_lifecycle(event, context)
+
+
+          def on_lifecycle(event, context):
+              project = os.environ["PROJECT_NAME"]
+              request = event["RequestType"]
+              try:
+                  if request == "Create" and os.environ.get("RUN_ON_CREATE") == "true":
+                      build = codebuild.start_build(projectName=project)
+                      print("Started apply build " + build["build"]["id"])
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  elif request == "Delete" and os.environ.get("DESTROY_ON_DELETE") == "true":
+                      build = codebuild.start_build(
+                          projectName=project,
+                          environmentVariablesOverride=[
+                              {"name": "CAKE_ACTION", "value": "destroy", "type": "PLAINTEXT"},
+                          ],
+                      )
+                      build_id = build["build"]["id"]
+                      print("Started destroy build " + build_id)
+                      # Defer the CloudFormation response: stash what we need to
+                      # answer it once the build finishes, and return WITHOUT
+                      # responding so stack deletion blocks until then.
+                      ssm.put_parameter(
+                          Name=PREFIX + build_uuid(build_id),
+                          Type="String",
+                          Overwrite=True,
+                          Value=json.dumps({
+                              "ResponseURL": event["ResponseURL"],
+                              "StackId": event["StackId"],
+                              "RequestId": event["RequestId"],
+                              "LogicalResourceId": event["LogicalResourceId"],
+                              "PhysicalResourceId": event.get(
+                                  "PhysicalResourceId", context.log_stream_name),
+                          }),
+                      )
+                  else:
+                      # Update, create-with-RunOnCreate-false, or
+                      # delete-with-DestroyOnDelete-false: nothing to run.
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              except Exception as error:
+                  print("Error: " + str(error))
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(error)})
+
+
+          def on_build_complete(event, context):
+              detail = event["detail"]
+              status = detail["build-status"]
+              name = PREFIX + build_uuid(detail["build-id"])
+              try:
+                  saved = json.loads(ssm.get_parameter(Name=name)["Parameter"]["Value"])
+              except ssm.exceptions.ParameterNotFound:
+                  # Not a stack-delete destroy build (e.g. a normal apply/plan).
+                  return
+              cfn_status = cfnresponse.SUCCESS if status == "SUCCEEDED" else cfnresponse.FAILED
+              cfnresponse.send(
+                  saved, context, cfn_status, {},
+                  physicalResourceId=saved["PhysicalResourceId"],
+                  reason="Destroy build " + status + " (" + detail["build-id"] + ")",
+              )
+              ssm.delete_parameter(Name=name)
+
+  # Fires when an installer build reaches a terminal state. The function ignores
+  # builds with no stashed response (apply/plan runs); only stack-delete destroy
+  # builds carry one.
+  BuildCompleteRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Completes a deferred stack delete when the destroy build finishes.
+      EventPattern:
+        source: [aws.codebuild]
+        detail-type: ["CodeBuild Build State Change"]
+        detail:
+          project-name: [!Ref InstallProject]
+          build-status: [SUCCEEDED, FAILED, FAULTED, STOPPED, TIMED_OUT]
+      Targets:
+        - Id: install-trigger
+          Arn: !GetAtt InstallTriggerFunction.Arn
+
+  BuildCompletePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref InstallTriggerFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt BuildCompleteRule.Arn
+
+  StartInstall:
+    Type: AWS::CloudFormation::CustomResource
+    # On delete, CloudFormation tears down this resource first (it depends on the
+    # project, function, and rule). Because the delete response is deferred until
+    # the destroy build finishes, those dependencies stay alive for the whole
+    # teardown — the build keeps its project and admin role, and the rule remains
+    # to deliver the completion event.
+    DependsOn: [BuildCompleteRule, BuildCompletePermission]
+    Properties:
+      ServiceToken: !GetAtt InstallTriggerFunction.Arn
+      ProjectName: !Ref InstallProject
+
 Outputs:
   StateBucketName:
     Description: S3 bucket holding Terraform remote state.
@@ -174,5 +361,7 @@ Outputs:
     Value: !Ref InstallProject
 
   StartInstallCommand:
-    Description: Run this to start the Cake Agents install.
+    Description: >-
+      Run this to (re)start the install manually, e.g. when RunOnCreate is false
+      or to plan/destroy via --environment-variables-override.
     Value: !Sub "aws codebuild start-build --project-name ${InstallProject} --region ${AWS::Region}"

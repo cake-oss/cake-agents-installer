@@ -65,7 +65,8 @@ docker build -t cake-agents-installer .
 
 ## Option 2: CloudFormation
 
-This creates the S3 state bucket and a CodeBuild project that runs the image.
+This creates the S3 state bucket and a CodeBuild project that runs the image,
+and by default starts the install automatically once the stack is created.
 
 ```sh
 aws cloudformation deploy \
@@ -78,18 +79,29 @@ aws cloudformation deploy \
     InstallKey=...
 ```
 
-Then start the install (the exact command is in the stack Outputs):
+The install starts automatically when the stack is created. To deploy without
+starting it — and start it yourself later — set `RunOnCreate=false`:
 
 ```sh
+aws cloudformation deploy \
+  --template-file cloudformation/cake-agents-installer.yaml \
+  --stack-name cake-agents \
+  --capabilities CAPABILITY_IAM \
+  --parameter-overrides RunOnCreate=false ClusterName=prod Region=us-east-2 InstallKey=...
+
+# Then start it manually (the exact command is in the stack Outputs):
 aws codebuild start-build --project-name cake-agents-cake-agents-install
 ```
 
-To plan or destroy instead, override `CAKE_ACTION` for a single run:
+To run a one-off `plan`, override `CAKE_ACTION` for a single build:
 
 ```sh
 aws codebuild start-build --project-name cake-agents-cake-agents-install \
-  --environment-variables-override name=CAKE_ACTION,value=destroy
+  --environment-variables-override name=CAKE_ACTION,value=plan
 ```
+
+Tearing everything down is the same mechanism with `CAKE_ACTION=destroy` — see
+[Uninstalling](#uninstalling) for the correct order.
 
 > The CodeBuild role is granted `AdministratorAccess` because Terraform
 > provisions a wide range of resources. Scope it down for production by editing
@@ -100,6 +112,40 @@ aws codebuild start-build --project-name cake-agents-cake-agents-install \
 Terraform prints a `cluster_name` output for the new EKS cluster. DNS and
 certificate validation are handled automatically by Cake using your install
 key — no manual nameserver delegation is required.
+
+## Uninstalling
+
+Deleting the CloudFormation stack does **not** remove the Terraform-provisioned
+infrastructure (VPC, EKS cluster, load balancers). The stack only manages the
+installer scaffolding — Terraform created the real resources from inside a
+CodeBuild run, so CloudFormation has no record of them. Deleting the stack first
+would leave that infrastructure running and strand the Terraform state.
+
+Tear down in this order instead:
+
+1. **Run a destroy build** and wait for it to finish (~20–40 min for EKS):
+
+   ```sh
+   aws codebuild start-build --project-name cake-agents-cake-agents-install \
+     --environment-variables-override name=CAKE_ACTION,value=destroy
+   ```
+
+   If you ran the container directly (Option 1), use `-e CAKE_ACTION=destroy`
+   with the same `docker run` command instead.
+
+2. **Delete the stack** once the destroy build succeeds:
+
+   ```sh
+   aws cloudformation delete-stack --stack-name cake-agents
+   ```
+
+3. **Remove the state bucket** (optional). It has `DeletionPolicy: Retain`, so
+   it survives stack deletion. Empty and delete it once you no longer need the
+   state:
+
+   ```sh
+   aws s3 rb s3://<state-bucket> --force
+   ```
 
 ## License
 
