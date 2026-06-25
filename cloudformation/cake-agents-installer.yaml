@@ -1,0 +1,172 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Bootstraps the infrastructure needed to install Cake Agents: an S3 bucket for
+  Terraform remote state and a CodeBuild project that runs the cake-agents
+  installer container image. After deploying this stack, start the install with
+  the "aws codebuild start-build" command shown in the stack Outputs.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: "Installer image" }
+        Parameters: [ImageUri, CakeAgentsRef]
+      - Label: { default: "Cluster" }
+        Parameters: [ClusterName, Region, VpcCidr]
+      - Label: { default: "Cake Agents" }
+        Parameters: [ChartVersion, InstallKey]
+      - Label: { default: "State" }
+        Parameters: [StateBucketName]
+
+Parameters:
+  ImageUri:
+    Type: String
+    Default: ghcr.io/cake-oss/cake-agents-installer:latest
+    Description: Container image that runs the installer.
+
+  CakeAgentsRef:
+    Type: String
+    Default: main
+    Description: git ref of cake-oss/terraform-cake-agents to deploy.
+
+  StateBucketName:
+    Type: String
+    Default: ""
+    Description: >-
+      Name for the Terraform state bucket. Leave blank to auto-generate a
+      unique name.
+
+  ClusterName:
+    Type: String
+    Description: Cluster name (e.g. "prod"). Also used as the Terraform state key prefix.
+    AllowedPattern: "[a-z0-9-]+"
+
+  Region:
+    Type: String
+    Default: us-east-2
+    Description: AWS region to deploy Cake Agents into.
+
+  ChartVersion:
+    Type: String
+    Default: 0.11.2
+    Description: cake-agents Helm chart version.
+
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: CIDR block for the new VPC.
+
+  InstallKey:
+    Type: String
+    NoEcho: true
+    Description: Install key from Cake, used for Cake-hosted DNS automation.
+
+Conditions:
+  GenerateBucketName: !Equals [!Ref StateBucketName, ""]
+
+Resources:
+  StateBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !If [GenerateBucketName, !Ref "AWS::NoValue", !Ref StateBucketName]
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  InstallLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/cake-agents/${AWS::StackName}/install"
+      RetentionInDays: 90
+
+  # NOTE: Terraform provisions a VPC, an EKS cluster, ACM certificates, IAM
+  # roles, and load balancers. That requires broad privileges.
+  # AdministratorAccess keeps this template simple; scope it down for production
+  # by replacing the policy below with the least privilege your org requires.
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: codebuild.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+      Policies:
+        - PolicyName: state-bucket-and-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:ListBucket, s3:GetBucketLocation]
+                Resource: !GetAtt StateBucket.Arn
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: !Sub "${StateBucket.Arn}/*"
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub "${InstallLogGroup.Arn}:*"
+
+  InstallProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${AWS::StackName}-cake-agents-install"
+      Description: Runs the Cake Agents installer container.
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Artifacts: { Type: NO_ARTIFACTS }
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref InstallLogGroup
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: !Ref ImageUri
+        # The installer image is not in ECR; CodeBuild pulls it as a public image.
+        ImagePullCredentialsType: CODEBUILD
+        EnvironmentVariables:
+          - { Name: CAKE_STATE_BUCKET, Value: !Ref StateBucket }
+          - { Name: CAKE_ACTION, Value: apply }
+          - { Name: CAKE_AGENTS_REF, Value: !Ref CakeAgentsRef }
+          - { Name: AWS_REGION, Value: !Ref "AWS::Region" }
+          - { Name: TF_VAR_name, Value: !Ref ClusterName }
+          - { Name: TF_VAR_region, Value: !Ref Region }
+          - { Name: TF_VAR_vpc_cidr, Value: !Ref VpcCidr }
+          - { Name: TF_VAR_cake_agents_chart_version, Value: !Ref ChartVersion }
+          - { Name: TF_VAR_install_key, Value: !Ref InstallKey }
+      Source:
+        Type: NO_SOURCE
+        # CodeBuild overrides the image ENTRYPOINT, so invoke the installer
+        # explicitly. CAKE_ACTION (apply/plan/destroy) can be overridden per run
+        # with: aws codebuild start-build --environment-variables-override ...
+        BuildSpec: |
+          version: 0.2
+          phases:
+            build:
+              commands:
+                - cake-agents-install
+      TimeoutInMinutes: 60
+
+Outputs:
+  StateBucketName:
+    Description: S3 bucket holding Terraform remote state.
+    Value: !Ref StateBucket
+
+  CodeBuildProjectName:
+    Description: CodeBuild project that runs the installer.
+    Value: !Ref InstallProject
+
+  StartInstallCommand:
+    Description: Run this to start the Cake Agents install.
+    Value: !Sub "aws codebuild start-build --project-name ${InstallProject} --region ${AWS::Region}"
