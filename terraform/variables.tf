@@ -31,3 +31,9 @@ variable "cake_console_url" {
   default     = "https://console.cake.ai"
   description = "URL of the Cake console this installation reports to."
 }
+
+variable "cake_agents_chart_upstream_registry" {
+  type        = string
+  default     = "684117700585.dkr.ecr.us-east-2.amazonaws.com"
+  description = "Upstream ECR registry hosting the cake-agents chart. Used as the pull-through cache upstream."
+}
