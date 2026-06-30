@@ -56,17 +56,19 @@ Parameters:
 
   ClusterName:
     Type: String
+    Default: cake-agents
     Description: Cluster name (e.g. "prod"). Also used as the Terraform state key prefix.
     AllowedPattern: "[a-z0-9-]+"
 
   Region:
     Type: String
-    Default: us-east-2
     Description: AWS region to deploy Cake Agents into.
+    AllowedPattern: "[a-z]{2}-[a-z]+-[0-9]+"
+    ConstraintDescription: Must be a valid AWS region (e.g. us-east-2).
 
   ChartVersion:
     Type: String
-    Default: 0.11.2
+    Default: 0.12.0
     Description: cake-agents Helm chart version.
 
   VpcCidr:
@@ -77,6 +79,7 @@ Parameters:
   InstallKey:
     Type: String
     NoEcho: true
+    MinLength: 1
     Description: Install key from Cake, used for Cake-hosted DNS automation.
 
   ConsoleUrl:
