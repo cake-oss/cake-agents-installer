@@ -36,7 +36,7 @@ terraform {
 
 # Mirrors cake-oss/terraform-cake-agents//examples/basic, but sources the module
 # by git ref so the installer is self-contained. install.sh rewrites the ?ref=
-# pin when CAKE_AGENTS_REF is set.
+# pin when CAKE_TF_GIT_REF is set.
 module "cake_agents" {
   source = "git::https://github.com/cake-oss/terraform-cake-agents.git?ref=main"
 

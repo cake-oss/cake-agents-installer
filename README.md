@@ -33,7 +33,7 @@ Terraform inputs are passed as `TF_VAR_*` environment variables.
 | `CAKE_STATE_PREFIX` | no | `cake-agents` | State key prefix within the bucket |
 | `CAKE_STATE_REGION` | no | `AWS_REGION`/`TF_VAR_region` | Region of the state bucket |
 | `CAKE_ACTION` | no | `apply` | `plan`, `apply`, or `destroy` |
-| `CAKE_AGENTS_REF` | no | `main` | git ref of `terraform-cake-agents` |
+| `CAKE_TF_GIT_REF` | no | `main` | git ref of `terraform-cake-agents` |
 | `TF_VAR_name` | yes | — | Cluster name (e.g. `prod`) |
 | `TF_VAR_region` | yes | — | AWS region to deploy into |
 | `TF_VAR_install_key` | yes | — | Install key for Cake-hosted DNS automation |
@@ -66,7 +66,9 @@ docker build -t cake-agents-installer .
 ## Option 2: CloudFormation
 
 This creates the S3 state bucket and a CodeBuild project that runs the image,
-and by default starts the install automatically once the stack is created.
+and by default starts the install automatically once the stack is created. The
+CloudFormation stack name is used as the Terraform cluster name and state key
+prefix.
 
 ```sh
 aws cloudformation deploy \
@@ -74,7 +76,6 @@ aws cloudformation deploy \
   --stack-name cake-agents \
   --capabilities CAPABILITY_IAM \
   --parameter-overrides \
-    ClusterName=prod \
     Region=us-east-2 \
     InstallKey=...
 ```
@@ -87,16 +88,16 @@ aws cloudformation deploy \
   --template-file cloudformation/cake-agents-installer.yaml \
   --stack-name cake-agents \
   --capabilities CAPABILITY_IAM \
-  --parameter-overrides RunOnCreate=false ClusterName=prod Region=us-east-2 InstallKey=...
+  --parameter-overrides RunOnCreate=false Region=us-east-2 InstallKey=...
 
 # Then start it manually (the exact command is in the stack Outputs):
-aws codebuild start-build --project-name cake-agents-cake-agents-install
+aws codebuild start-build --project-name cake-agents-installer
 ```
 
 To run a one-off `plan`, override `CAKE_ACTION` for a single build:
 
 ```sh
-aws codebuild start-build --project-name cake-agents-cake-agents-install \
+aws codebuild start-build --project-name cake-agents-installer \
   --environment-variables-override name=CAKE_ACTION,value=plan
 ```
 
@@ -126,7 +127,7 @@ Tear down in this order instead:
 1. **Run a destroy build** and wait for it to finish (~20–40 min for EKS):
 
    ```sh
-   aws codebuild start-build --project-name cake-agents-cake-agents-install \
+   aws codebuild start-build --project-name cake-agents-installer \
      --environment-variables-override name=CAKE_ACTION,value=destroy
    ```
 

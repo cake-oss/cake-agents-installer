@@ -10,9 +10,9 @@ Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label: { default: "Installer image" }
-        Parameters: [ImageUri, CakeAgentsRef, RunOnCreate, DestroyOnDelete]
+        Parameters: [ImageUri, TerraformGitRef, RunOnCreate, DestroyOnDelete]
       - Label: { default: "Cluster" }
-        Parameters: [ClusterName, Region, VpcCidr]
+        Parameters: [Region, VpcCidr]
       - Label: { default: "Cake Agents" }
         Parameters: [ChartVersion, InstallKey, ConsoleUrl]
       - Label: { default: "State" }
@@ -24,10 +24,10 @@ Parameters:
     Default: ghcr.io/cake-oss/cake-agents-installer:latest
     Description: Container image that runs the installer.
 
-  CakeAgentsRef:
+  TerraformGitRef:
     Type: String
     Default: main
-    Description: git ref of cake-oss/terraform-cake-agents to deploy.
+    Description: Git ref of cake-oss/terraform-cake-agents to deploy.
 
   RunOnCreate:
     Type: String
@@ -54,12 +54,6 @@ Parameters:
       Name for the Terraform state bucket. Leave blank to auto-generate a
       unique name.
 
-  ClusterName:
-    Type: String
-    Default: cake-agents
-    Description: Cluster name (e.g. "prod"). Also used as the Terraform state key prefix.
-    AllowedPattern: "[a-z0-9-]+"
-
   Region:
     Type: String
     Description: AWS region to deploy Cake Agents into.
@@ -69,7 +63,7 @@ Parameters:
   ChartVersion:
     Type: String
     Default: ""
-    Description: cake-agents Helm chart version.
+    Description: cake-agents Helm chart version. Defaults to latest.
 
   VpcCidr:
     Type: String
@@ -96,7 +90,8 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      BucketName: !If [GenerateBucketName, !Ref "AWS::NoValue", !Ref StateBucketName]
+      BucketName:
+        !If [GenerateBucketName, !Ref "AWS::NoValue", !Ref StateBucketName]
       VersioningConfiguration:
         Status: Enabled
       BucketEncryption:
@@ -148,7 +143,7 @@ Resources:
   InstallProject:
     Type: AWS::CodeBuild::Project
     Properties:
-      Name: !Sub "${AWS::StackName}-cake-agents-install"
+      Name: !Sub "${AWS::StackName}-installer"
       Description: Runs the Cake Agents installer container.
       ServiceRole: !GetAtt CodeBuildRole.Arn
       Artifacts: { Type: NO_ARTIFACTS }
@@ -165,9 +160,9 @@ Resources:
         EnvironmentVariables:
           - { Name: CAKE_STATE_BUCKET, Value: !Ref StateBucket }
           - { Name: CAKE_ACTION, Value: apply }
-          - { Name: CAKE_AGENTS_REF, Value: !Ref CakeAgentsRef }
+          - { Name: CAKE_TF_GIT_REF, Value: !Ref TerraformGitRef }
           - { Name: AWS_REGION, Value: !Ref "AWS::Region" }
-          - { Name: TF_VAR_name, Value: !Ref ClusterName }
+          - { Name: TF_VAR_name, Value: !Ref "AWS::StackName" }
           - { Name: TF_VAR_region, Value: !Ref Region }
           - { Name: TF_VAR_vpc_cidr, Value: !Ref VpcCidr }
           - { Name: TF_VAR_cake_agents_chart_version, Value: !Ref ChartVersion }
@@ -212,10 +207,12 @@ Resources:
               # Stash the pending stack-delete response until the destroy build
               # finishes, then read it back from the EventBridge handler.
               - Effect: Allow
-                Action: [ssm:PutParameter, ssm:GetParameter, ssm:DeleteParameter]
+                Action:
+                  [ssm:PutParameter, ssm:GetParameter, ssm:DeleteParameter]
                 Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cake-agents/${AWS::StackName}/destroy/*"
               - Effect: Allow
-                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Action:
+                  [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
                 Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
 
   InstallTriggerFunction:

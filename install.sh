@@ -14,7 +14,8 @@
 #   CAKE_STATE_REGION   (optional) Region of the state bucket.
 #                                  Defaults to AWS_REGION, then TF_VAR_region.
 #   CAKE_ACTION         (optional) plan | apply | destroy. Default: apply
-#   CAKE_AGENTS_REF     (optional) git ref of terraform-cake-agents. Default: main
+#   CAKE_TF_GIT_REF     (optional) git ref of terraform-cake-agents. Default: main
+#                                  TERRAFORM_GIT_REF and CAKE_AGENTS_REF are also supported for compatibility.
 #
 # Terraform module inputs are passed via TF_VAR_* variables, e.g.:
 #
@@ -33,7 +34,7 @@ die() { log "ERROR: $*" >&2; exit 1; }
 # --- Resolve configuration ---------------------------------------------------
 CAKE_STATE_PREFIX="${CAKE_STATE_PREFIX:-cake-agents}"
 CAKE_ACTION="${CAKE_ACTION:-apply}"
-CAKE_AGENTS_REF="${CAKE_AGENTS_REF:-main}"
+CAKE_TF_GIT_REF="${CAKE_TF_GIT_REF:-${TERRAFORM_GIT_REF:-${CAKE_AGENTS_REF:-main}}}"
 
 [ -n "${CAKE_STATE_BUCKET:-}" ]  || die "CAKE_STATE_BUCKET is required (S3 bucket for Terraform state)."
 [ -n "${TF_VAR_name:-}" ]        || die "TF_VAR_name is required (cluster name)."
@@ -53,9 +54,9 @@ cd "${WORKDIR}"
 
 # Pin the terraform-cake-agents module to the requested ref. Terraform does not
 # allow variable interpolation in a module source, so we rewrite it in place.
-if [ "${CAKE_AGENTS_REF}" != "main" ]; then
-  log "Pinning terraform-cake-agents module to ref '${CAKE_AGENTS_REF}'."
-  sed -i "s|terraform-cake-agents.git?ref=main|terraform-cake-agents.git?ref=${CAKE_AGENTS_REF}|g" main.tf
+if [ "${CAKE_TF_GIT_REF}" != "main" ]; then
+  log "Pinning terraform-cake-agents module to ref '${CAKE_TF_GIT_REF}'."
+  sed -i "s|terraform-cake-agents.git?ref=main|terraform-cake-agents.git?ref=${CAKE_TF_GIT_REF}|g" main.tf
 fi
 
 # --- Run Terraform -----------------------------------------------------------
