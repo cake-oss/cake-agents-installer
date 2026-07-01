@@ -16,7 +16,6 @@ variable "vpc_cidr" {
 
 variable "cake_agents_chart_version" {
   type        = string
-  default     = "0.11.2"
   description = "cake-agents chart version. Get the latest from Cake."
 }
 

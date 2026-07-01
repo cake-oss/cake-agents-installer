@@ -68,7 +68,7 @@ Parameters:
 
   ChartVersion:
     Type: String
-    Default: 0.12.0
+    Default: ""
     Description: cake-agents Helm chart version.
 
   VpcCidr:
